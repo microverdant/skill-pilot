@@ -6,5 +6,5 @@
   type: "script",
   script: "extension.py",
   entrypoint: "index.html",
-  installed: false
+  installed: true
 }
