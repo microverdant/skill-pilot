@@ -162,8 +162,8 @@ def _read_mcp_config() -> Dict[str, Any]:
 
 
 def _write_mcp_config(data: Dict[str, Any]) -> None:
-    _MCP_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _MCP_CONFIG_PATH.write_text(json5.dumps(data, indent=2) + "\n", encoding="utf-8")
+    from json5_io import write_preserving_comments
+    write_preserving_comments(_MCP_CONFIG_PATH, data)
 
 
 def _infer_mcp_server_type(config: Dict[str, Any]) -> str:
@@ -206,6 +206,10 @@ def config_mcp_servers_list():
             is_disabled = _parse_bool_value(disabled_raw)
         if is_disabled:
             entry["disabled"] = True
+        if cfg.get("description"):
+            entry["description"] = str(cfg["description"])
+        if cfg.get("instructions"):
+            entry["instructions"] = str(cfg["instructions"])
         for field in ("command", "args", "env", "url", "headers"):
             if field in expanded:
                 entry[field] = expanded[field]
@@ -239,6 +243,12 @@ async def config_mcp_servers_save(request: Request):
         return JSONResponse(status_code=403, content={"error": f"Cannot modify system server: {name}"})
 
     entry: Dict[str, Any] = {}
+    description = (str(body.get("description") or "")).strip()
+    if description:
+        entry["description"] = description
+    instructions = (str(body.get("instructions") or "")).strip()
+    if instructions:
+        entry["instructions"] = instructions
     if server_type == "stdio":
         command = (str(body.get("command") or "")).strip()
         if not command:
@@ -367,6 +377,25 @@ def config_skills_list():
     return {"categories": categories}
 
 
+@router.get("/api/config/skills/installed")
+def config_skills_installed():
+    installed_dir = _REPO_ROOT / ".agent" / "skills"
+    skills: List[Dict[str, str]] = []
+    if installed_dir.is_dir():
+        for entry in sorted(installed_dir.iterdir()):
+            if entry.name.startswith("."):
+                continue
+            skill_md = entry / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            meta = _parse_skill_frontmatter(skill_md)
+            skills.append({
+                "name": meta.get("name", entry.name),
+                "description": meta.get("description", ""),
+            })
+    return {"skills": skills}
+
+
 @router.post("/api/config/skills/update")
 async def config_skills_update(request: Request):
     try:
@@ -378,10 +407,8 @@ async def config_skills_update(request: Request):
     if not isinstance(disabled, list):
         return JSONResponse(status_code=400, content={"error": "disabled must be an array"})
 
-    _DISABLED_SKILLS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _DISABLED_SKILLS_PATH.write_text(
-        json5.dumps(disabled, indent=2) + "\n", encoding="utf-8"
-    )
+    from json5_io import write_preserving_comments
+    write_preserving_comments(_DISABLED_SKILLS_PATH, disabled)
 
     bin_dir = _REPO_ROOT / "core" / "bin"
     skill_verify_paths: List[str] = []
@@ -495,14 +522,11 @@ async def config_extensions_action(request: Request):
     if action in ("install", "uninstall"):
         config_path = ext_dir / "extension.json5"
         try:
-            raw_text = config_path.read_text(encoding="utf-8")
-            raw_data = json5.loads(raw_text)
+            from json5_io import write_preserving_comments
+            raw_data = json5.loads(config_path.read_text(encoding="utf-8"))
             if isinstance(raw_data, dict):
                 raw_data["installed"] = action == "install"
-                config_path.write_text(
-                    json5.dumps(raw_data, indent=2, ensure_ascii=False, trailing_commas=False) + "\n",
-                    encoding="utf-8",
-                )
+                write_preserving_comments(config_path, raw_data)
         except Exception as exc:
             logger.warning("Failed to update installed flag in %s: %s", config_path, exc)
 

@@ -45,6 +45,7 @@ import {
   IconVideo,
   IconCamera,
   IconFolderOpen,
+  IconHistory,
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -77,6 +78,8 @@ interface ExternalTmuxSession {
 interface McpServer {
   name: string;
   type: string;
+  description?: string;
+  instructions?: string;
   system?: boolean;
   disabled?: boolean;
   command?: string;
@@ -88,6 +91,8 @@ interface McpServer {
 
 interface McpFormData {
   name: string;
+  description: string;
+  instructions: string;
   type: string;
   command: string;
   args: string;
@@ -147,7 +152,7 @@ interface ExtensionItem {
 }
 
 const EMPTY_MCP_FORM: McpFormData = {
-  name: '', type: 'stdio', command: '', args: '', env: [['', '']],
+  name: '', description: '', instructions: '', type: 'stdio', command: '', args: '', env: [['', '']],
   url: '', headers: [['', '']], disabled: false,
 };
 
@@ -319,7 +324,7 @@ export default function HomePage() {
     setSelectedSessionPath,
   } = useSessionRoots();
 
-  const fetchLlmProviders = async () => {
+  const fetchLlmProviders = useCallback(async () => {
     try {
       const res = await axios.get(`${API_BASE_URL}/llm/providers`);
       const providers: LlmProvider[] = res.data.providers || [];
@@ -336,7 +341,7 @@ export default function HomePage() {
     } catch (err) {
       console.error('Failed to fetch LLM providers:', err);
     }
-  };
+  }, []);
 
   const fetchExternalSessions = useCallback(async (quiet: boolean = false) => {
     if (!quiet) setLoadingExternalSessions(true);
@@ -805,7 +810,9 @@ export default function HomePage() {
     },
     {
       label: 'New Session',
-      href: '/',
+      dividerBefore: '',
+      href: '/?view=home',
+      view: 'home',
       icon: <IconPlus size="1rem" />,
       action: () => {
         if (activeView === 'live-terminal') {
@@ -813,10 +820,12 @@ export default function HomePage() {
         } else if (activeView !== 'home') {
           setActiveView('home');
         }
+        void router.push('/?view=home');
       },
       disabled: activeView === 'home',
     },
-    { dividerBefore: '', label: 'Live Sessions', href: '/terminals', icon: <IconTerminal2 size="1rem" />, action: () => { void router.push('/terminals'); } },
+    { label: 'Live Sessions', href: '/terminals', icon: <IconTerminal2 size="1rem" />, action: () => { void router.push('/terminals'); } },
+    { label: 'Session Histories', href: '/terminal-histories', icon: <IconHistory size="1rem" />, action: () => { void router.push('/terminal-histories'); } },
     { dividerBefore: 'Workspace', label: 'Learning', href: '/courses', icon: <IconSchool size="1rem" />, action: () => router.push('/courses') },
     { label: 'Vibe Coding', href: '/vibe-coding', icon: <IconBriefcase size="1rem" />, action: () => router.push('/vibe-coding') },
     { label: 'Research', href: '/research', icon: <IconSearch size="1rem" />, action: () => router.push('/research') },
@@ -1598,7 +1607,7 @@ export default function HomePage() {
     const name = skillSubScreen.skillName;
     let prompt: string;
     if (skillSubScreen.createSkill) {
-      prompt = `Create a user agent skill use agent skill \`create-update-agent-skill\`, as user's requirement below:\n\n${instruction}`;
+      prompt = `Create a user agent skill using agent skill \`agent-skill\`, as user's requirement below:\n\n${instruction}`;
     } else {
       prompt = `Use agent skill: ${name}.`;
       if (instruction) {
@@ -1826,7 +1835,7 @@ export default function HomePage() {
           <button
             type="button"
             onClick={() => {
-              setSkillSubScreen({ mode: 'use', skillName: 'create-update-agent-skill', categoryId: 'system', createSkill: true });
+              setSkillSubScreen({ mode: 'use', skillName: 'agent-skill', categoryId: 'system', createSkill: true });
               setSkillUsePrompt('');
             }}
             style={{
@@ -2497,6 +2506,8 @@ export default function HomePage() {
     if (headerPairs.length === 0) headerPairs.push(['', '']);
     setMcpForm({
       name: server.name,
+      description: server.description || '',
+      instructions: server.instructions || '',
       type: server.type,
       command: server.command || '',
       args: (server.args || []).join('\n'),
@@ -2516,11 +2527,22 @@ export default function HomePage() {
   };
 
   const mcpSave = async () => {
-    setMcpSaving(true);
     setMcpError('');
+    const isNew = mcpEditing === '__new__';
+    const trimmedName = mcpForm.name.trim();
+    if (isNew) {
+      const allSkillNames = new Set(skillCategories.flatMap((c) => c.skills.map((s) => s.name)));
+      if (allSkillNames.has(trimmedName)) {
+        setMcpError(`The name "${trimmedName}" is already used by an existing agent skill. Each MCP server name must be unique across all agent skills.`);
+        return;
+      }
+    }
+    setMcpSaving(true);
     try {
       const body: any = {
-        name: mcpForm.name.trim(),
+        name: trimmedName,
+        description: mcpForm.description.trim(),
+        instructions: mcpForm.instructions.trim() || undefined,
         type: mcpForm.type,
         disabled: mcpForm.disabled,
       };
@@ -2545,7 +2567,7 @@ export default function HomePage() {
       setMcpEditing(null);
       await fetchMcpServers();
     } catch (err: any) {
-      setMcpError(err?.response?.data?.error || 'Failed to save MCP server');
+      setMcpError((err as any)?.response?.data?.error || 'Failed to save MCP server');
     } finally {
       setMcpSaving(false);
     }
@@ -2699,6 +2721,38 @@ export default function HomePage() {
           </div>
 
           <div style={{ marginBottom: 12 }}>
+            <Text size="sm" weight={600} mb={4}>Description</Text>
+            <textarea
+              value={mcpForm.description}
+              onChange={(e) => setMcpForm((prev) => ({ ...prev, description: e.target.value }))}
+              placeholder="Describe what this MCP server provides to the agent..."
+              rows={2}
+              style={{
+                width: '100%', padding: '6px 8px', fontSize: 13, borderRadius: 6,
+                border: `1px solid ${theme.colors.gray[3]}`,
+                background: theme.colorScheme === 'dark' ? theme.colors.dark[6] : '#fff',
+                color: 'inherit', resize: 'vertical', fontFamily: 'inherit',
+              }}
+            />
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <Text size="sm" weight={600} mb={4}>Instructions <Text span size="xs" color="dimmed">(optional — prepended to the generated SKILL.md)</Text></Text>
+            <textarea
+              value={mcpForm.instructions}
+              onChange={(e) => setMcpForm((prev) => ({ ...prev, instructions: e.target.value }))}
+              placeholder="Custom instructions for how the agent should use this MCP server and its tools..."
+              rows={3}
+              style={{
+                width: '100%', padding: '6px 8px', fontSize: 13, borderRadius: 6,
+                border: `1px solid ${theme.colors.gray[3]}`,
+                background: theme.colorScheme === 'dark' ? theme.colors.dark[6] : '#fff',
+                color: 'inherit', resize: 'vertical', fontFamily: 'inherit',
+              }}
+            />
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
             <Text size="sm" weight={600} mb={4}>Type</Text>
             <select
               value={mcpForm.type}
@@ -2780,6 +2834,11 @@ export default function HomePage() {
               Disabled
             </label>
           </div>
+
+          <Text size="xs" color="dimmed" mb={10}>
+            The server <strong>Name</strong> is used as the agent skill name and the <strong>Description</strong> as the agent skill description.
+            The name must be unique across all agent skills.
+          </Text>
 
           <button
             type="button"
@@ -2866,7 +2925,10 @@ export default function HomePage() {
                   </span>
                 )}
               </div>
-              <Text size="xs" color="dimmed">
+              {server.description && (
+                <Text size="xs" color="dimmed" mt={2}>{server.description}</Text>
+              )}
+              <Text size="xs" color="dimmed" mt={2}>
                 {server.type === 'stdio'
                   ? `${server.command || ''} ${(server.args || []).join(' ')}`.trim()
                   : server.url || ''}
